@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Analyse et Prévision Mvt Sortie</title>
+    <!-- Thème clair par défaut -->
+    <link id="themeLink" rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootswatch@5.3.0/dist/flatly/bootstrap.min.css">
+    <!-- Animate.css pour animations -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css"/>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+<body class="p-0">
+
+<!-- Navbar -->
+<nav class="navbar navbar-expand-lg navbar-light bg-primary mb-4">
+  <div class="container-fluid">
+    <span class="navbar-brand mb-0 h1 text-white">📊 Analyse & Prévision Mvt Sortie</span>
+    <button class="btn btn-secondary" onclick="toggleTheme()">🌗 Mode clair/sombre</button>
+  </div>
+</nav>
+
+<div class="container animate__animated animate__fadeIn">
+    <!-- Upload fichier -->
+    <div class="mb-3">
+        <label class="form-label">Fichier Excel</label>
+        <input type="file" id="fileInput" class="form-control" accept=".xlsx">
+    </div>
+
+    <!-- Navigation par onglets -->
+    <ul class="nav nav-tabs" id="myTab">
+        <li class="nav-item">
+            <a class="nav-link active" id="prev-tab" data-bs-toggle="tab" href="#prev">📈 Prévisions</a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link" id="sum-tab" data-bs-toggle="tab" href="#sum">🧮 Somme par période</a>
+        </li>
+    </ul>
+
+    <div class="tab-content mt-3">
+        <!-- Onglet Prévisions -->
+        <div class="tab-pane fade show active" id="prev">
+            <div class="row mb-3">
+                <div class="col">
+                    <label class="form-label">Fenêtre moyenne mobile (mois)</label>
+                    <input type="number" id="fenetre" class="form-control" value="3" min="1" max="12">
+                </div>
+                <div class="col">
+                    <label class="form-label">Mois à prévoir</label>
+                    <input type="number" id="moisPrev" class="form-control" value="6" min="1" max="24">
+                </div>
+            </div>
+            <button class="btn btn-primary mb-3" onclick="lancerPrevision()">📈 Lancer la prévision</button>
+            <div id="chart" style="height:500px;"></div>
+        </div>
+
+        <!-- Onglet Somme par période -->
+        <div class="tab-pane fade" id="sum">
+            <div class="row mb-3">
+                <div class="col">
+                    <label class="form-label">Date début</label>
+                    <input type="date" id="dateDebut" class="form-control">
+                </div>
+                <div class="col">
+                    <label class="form-label">Date fin</label>
+                    <input type="date" id="dateFin" class="form-control">
+                </div>
+            </div>
+            <button class="btn btn-success mb-3" onclick="calculerSomme()">🧮 Calculer la somme</button>
+            <div id="resultatSomme" class="alert alert-info" style="display:none;"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let donnees = [];
+    let isDarkMode = false;
+
+    document.getElementById('fileInput').addEventListener('change', handleFile, false);
+
+    function toggleTheme() {
+        const theme = document.getElementById('themeLink');
+        if (isDarkMode) {
+            theme.href = 'https://cdn.jsdelivr.net/npm/bootswatch@5.3.0/dist/flatly/bootstrap.min.css';
+            isDarkMode = false;
+        } else {
+            theme.href = 'https://cdn.jsdelivr.net/npm/bootswatch@5.3.0/dist/darkly/bootstrap.min.css';
+            isDarkMode = true;
+        }
+        // Re-dessiner le graphique avec le bon thème
+        if (document.getElementById('chart').data) {
+            lancerPrevision(true);
+        }
+    }
+
+    function handleFile(e) {
+        const file = e.target.files[0];
+        const reader = new FileReader();
+        reader.onload = function(evt) {
+            const data = new Uint8Array(evt.target.result);
+            const workbook = XLSX.read(data, { type: 'array' });
+            const sheetName = workbook.SheetNames[0];
+            const sheet = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { raw: true });
+            donnees = sheet.map(row => ({
+                date: excelDateToJSDate(row['Modifle']),
+                mvt: Number(row['Mvt sortie']) || 0
+            })).filter(d => d.date && !isNaN(d.mvt));
+            alert("✅ Fichier chargé avec succès !");
+        };
+        reader.readAsArrayBuffer(file);
+    }
+
+    function excelDateToJSDate(serial) {
+        if (!serial) return null;
+        return new Date((serial - 25569) * 86400 * 1000);
+    }
+
+    function lancerPrevision(redraw=false) {
+        if (donnees.length === 0) {
+            if (!redraw) alert("Veuillez charger un fichier Excel.");
+            return;
+        }
+
+        const fenetre = parseInt(document.getElementById('fenetre').value);
+        const moisPrev = parseInt(document.getElementById('moisPrev').value);
+
+        const monthly = {};
+        donnees.forEach(d => {
+            const key = `${d.date.getFullYear()}-${String(d.date.getMonth()+1).padStart(2, '0')}`;
+            monthly[key] = (monthly[key] || 0) + d.mvt;
+        });
+
+        const dates = Object.keys(monthly).sort();
+        const valeurs = dates.map(d => monthly[d]);
+
+        const ma = valeurs.map((_, i, arr) => {
+            const start = Math.max(0, i - fenetre + 1);
+            const subset = arr.slice(start, i + 1);
+            return subset.reduce((a,b) => a+b, 0) / subset.length;
+        });
+
+        const lastMA = ma[ma.length - 1];
+        const lastDate = new Date(dates[dates.length - 1] + "-01");
+        const futureDates = [];
+        for (let i = 1; i <= moisPrev; i++) {
+            const fd = new Date(lastDate);
+            fd.setMonth(fd.getMonth() + i);
+            futureDates.push(fd.toISOString().slice(0,7));
+        }
+        const futureVals = Array(moisPrev).fill(lastMA);
+
+        const fig = [
+            { x: dates, y: valeurs, type: 'scatter', mode: 'lines+markers', name: 'Historique' },
+            { x: dates, y: ma, type: 'scatter', mode: 'lines', name: `Moyenne mobile (${fenetre} mois)`, line: { dash: 'dash' } },
+            { x: futureDates, y: futureVals, type: 'scatter', mode: 'lines+markers', name: `Prévision ${moisPrev} mois` }
+        ];
+
+        Plotly.newPlot('chart', fig, { 
+            title: 'Prévision empirique des Mvt sortie',
+            xaxis: { title: 'Mois' },
+            yaxis: { title: 'Mvt sortie' },
+            hovermode: 'x unified',
+            template: isDarkMode ? 'plotly_dark' : 'plotly_white'
+        });
+    }
+
+    function calculerSomme() {
+        if (donnees.length === 0) {
+            alert("Veuillez charger un fichier Excel.");
+            return;
+        }
+
+        const dateDebut = new Date(document.getElementById('dateDebut').value);
+        const dateFin = new Date(document.getElementById('dateFin').value);
+
+        if (isNaN(dateDebut) || isNaN(dateFin)) {
+            alert("Veuillez sélectionner les deux dates.");
+            return;
+        }
+
+        const total = donnees
+            .filter(d => d.date >= dateDebut && d.date <= dateFin)
+            .reduce((sum, d) => sum + d.mvt, 0);
+
+        const resDiv = document.getElementById('resultatSomme');
+        resDiv.style.display = "block";
+        resDiv.innerHTML = `💡 Total Mvt sortie entre ${dateDebut.toLocaleDateString()} et ${dateFin.toLocaleDateString()} : <b>${total}</b>`;
+    }
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
